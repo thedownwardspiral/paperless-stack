@@ -1,0 +1,19 @@
+tls:
+  options:
+    domain:
+      minVersion: VersionTLS12
+
+http:
+  middlewares:
+    traefik-auth:
+      basicAuth:
+        users:
+        - someusername:USE-HTPASSWD-TO-GENERATE-PASSWORD-HASH
+    dashboard-auth:
+      basicAuth:
+        users:
+        - someusername:USE-HTPASSWD-TO-GENERATE-PASSWORD-HASH
+    https-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
