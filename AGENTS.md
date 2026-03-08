@@ -4,11 +4,23 @@ This file defines how automated coding agents should work in this repository.
 
 ## Repository Overview
 
-- Project type: Docker Compose stack for Paperless-ngx and optional local AI services.
-- Main entrypoint: `compose.yaml`
+- Project type: Docker Compose stack for Paperless-ngx with local AI services.
+- Main entrypoint: `compose.yaml` (not tracked; `compose.yaml.example` is the tracked template)
 - Core services: `paperless`, `postgres`, `redis`, `gotenberg`, `tika`
-- Optional AI services: `ollama`, `open-webui`, `paperless-ai`, `paperless-gpt`
+- AI services: `llama-cpp`, `paperless-ai`, `paperless-gpt`
+- Infrastructure: `traefik` (reverse proxy with TLS)
 - Utility service: `dozzle`
+- Commented-out alternatives in compose.yaml.example: `ollama`, `open-webui`, `llama-swap`
+
+## Key Differences from Upstream
+
+This is a fork of timothystewart6/paperless-stack. Notable changes:
+
+- **llama.cpp** is the active LLM backend (replaces Ollama + Open WebUI)
+- **Traefik** reverse proxy handles routing and TLS — services are not exposed on localhost ports
+- **paperless-ai** uses the `custom` AI provider pointing to llama-cpp's OpenAI-compatible API
+- `compose.yaml` is gitignored (contains environment-specific hostnames); only `compose.yaml.example` is tracked
+- `traefik.yml` and `traefik.dynamic.yml` are gitignored; example files are tracked
 
 ## Primary Goals for Agents
 
@@ -20,20 +32,21 @@ This file defines how automated coding agents should work in this repository.
 ## Guardrails
 
 - Do not delete or reset contents under `*/data/`, `paperless/media/`, `paperless/export/`, or `paperless/consume/`.
-- Do not commit secrets or real credentials to `.env` files.
+- Do not commit secrets or real credentials. Only `.env.example` files are tracked; `.env` files are gitignored.
+- `compose.yaml`, `traefik.yml`, and `traefik.dynamic.yml` are gitignored. Edit the `.example` versions instead.
 - Prefer editing only files directly related to the user request.
 - Do not introduce unrelated refactors.
-- Do not change published port mappings unless explicitly requested.
 
 ## Working Conventions
 
 - Use `docker compose` (not legacy `docker-compose`) in commands and docs.
-- Keep service names and container names consistent with `compose.yaml`.
+- Keep service names and container names consistent with `compose.yaml.example`.
 - Preserve existing YAML style and comments where possible.
 - If you add a new service, include:
   - clear comment header
   - restart policy
-  - `env_file` usage where appropriate
+  - `env_file` usage
+  - Traefik labels for routing
   - volume mapping for persistent state (when needed)
 
 ## Validation Checklist
@@ -59,7 +72,7 @@ When changing setup/behavior, update `README.md` with:
 
 - what changed
 - required env/config updates
-- user-visible impact (ports, URLs, prerequisites)
+- user-visible impact (hostnames, prerequisites)
 
 ## Out of Scope Unless Requested
 
@@ -71,5 +84,6 @@ When changing setup/behavior, update `README.md` with:
 ## Notes for AI-Feature Changes
 
 - AI services are optional; maintain a working non-AI path.
-- Keep model references consistent with service env docs.
+- llama-cpp is the active LLM backend. Model GGUF files go in `./llama-cpp/models/`.
+- Keep model references consistent between `compose.yaml.example` and service `.env.example` files.
 - Avoid assumptions about GPU availability; do not remove existing GPU config unless requested.
