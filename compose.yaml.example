@@ -1,0 +1,336 @@
+services:
+  # traefik reverse proxy
+  traefik:
+    image: traefik:latest
+    container_name: traefik_v3
+    restart: unless-stopped
+    networks:
+      - traefik_default
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./certs/:/etc/step/
+      - ./traefik.yml:/etc/traefik/traefik.yml
+      - ./traefik.dynamic.yml:/etc/traefik/traefik.dynamic.yml
+      - ./acme/:/etc/traefik/acme/
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.entrypoints=http"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.domain.com`)"
+      - "traefik.http.routers.traefik.middlewares=https-redirect@file"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik-secure.entrypoints=https"
+      - "traefik.http.routers.traefik-secure.rule=Host(`traefik.domain.com`)"
+      - "traefik.http.routers.traefik-secure.middlewares=traefik-auth@file"
+      - "traefik.http.routers.traefik-secure.tls=true"
+      - "traefik.http.routers.traefik-secure.tls.domains[0].main=traefik.domain.com"
+      - "traefik.http.routers.traefik-secure.tls.certresolver=step-ca"
+      - "traefik.http.routers.traefik-secure.service=api@internal"
+
+  # paperless-ngx main service
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless-ngx
+    restart: unless-stopped
+    env_file: 
+      - ./paperless/.env
+    depends_on:
+      - postgres
+      - redis
+      - gotenberg
+      - tika
+    networks:
+      - backend
+      - traefik_default
+    volumes:
+      - ./paperless/data:/usr/src/paperless/data
+      - ./paperless/media:/usr/src/paperless/media
+      - ./paperless/export:/usr/src/paperless/export
+      - ./paperless/consume:/usr/src/paperless/consume
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless.entrypoints=http"
+      - "traefik.http.routers.paperless.rule=Host(`paperless.domain.com`)"
+      - "traefik.http.routers.paperless.middlewares=https-redirect@file"
+      - "traefik.http.routers.paperless-secure.entrypoints=https"
+      - "traefik.http.routers.paperless-secure.rule=Host(`paperless.domain.com`)"
+      - "traefik.http.routers.paperless-secure.tls=true"
+      - "traefik.http.routers.paperless-secure.tls.certresolver=step-ca"
+      - "traefik.http.services.paperless.loadbalancer.server.port=8000"
+      - "traefik.docker.network=traefik_default"
+  
+  # postgres database for paperless-ngx
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    container_name: postgres
+    env_file: 
+      - ./postgres/.env
+    networks:
+      - backend
+    volumes:
+      - ./postgres/data:/var/lib/postgresql
+  
+  # redis database for paperless-ngx
+  redis:
+    image: docker.io/library/redis:8
+    container_name: redis
+    restart: unless-stopped
+    env_file: 
+      - ./redis/.env
+    networks:
+      - backend
+    volumes:
+      - ./redis/data:/data
+  
+  # gotenberg service that paperless uses for document conversion
+  gotenberg:
+    image: docker.io/gotenberg/gotenberg:8.25
+    container_name: gotenberg
+    env_file: 
+      - ./gotenberg/.env
+    restart: unless-stopped
+    networks:
+      - backend
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+  
+  # tika service that paperless uses for document text extraction
+  tika:
+    image: docker.io/apache/tika:latest
+    container_name: tika
+    restart: unless-stopped
+    env_file: ./tika/.env
+    networks:
+      - backend
+  
+
+  # open-webui service for LLM interaction
+  # open-webui:
+  #   image: ghcr.io/open-webui/open-webui:latest
+  #   container_name: open-webui
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./open-webui/.env
+  #   depends_on:
+  #     # - ollama
+  #     - llama-cpp
+  #   networks:
+  #     - backend
+  #     - traefik_default
+  #   volumes:
+  #     - ./open-webui/data:/app/backend/data
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.open-webui.entrypoints=http"
+  #     - "traefik.http.routers.open-webui.rule=Host(`open-webui.domain.com`)"
+  #     - "traefik.http.routers.open-webui.middlewares=https-redirect@file"
+  #     - "traefik.http.routers.open-webui-secure.entrypoints=https"
+  #     - "traefik.http.routers.open-webui-secure.rule=Host(`open-webui.domain.com`)"
+  #     - "traefik.http.routers.open-webui-secure.tls=true"
+  #     - "traefik.http.routers.open-webui-secure.tls.certresolver=step-ca"
+  #     - "traefik.http.services.open-webui.loadbalancer.server.port=8080"
+  #     - "traefik.docker.network=traefik_default"
+
+  # ollama service for local LLMs
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama
+  #   env_file:
+  #     - ./ollama/.env
+  #   networks:
+  #     - backend
+  #     - traefik_default
+  #   volumes:
+  #     - ./ollama/data/:/root/.ollama
+  #     - ./ollama/models:/ollama-models
+  #   restart: unless-stopped
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.ollama.entrypoints=http"
+  #     - "traefik.http.routers.ollama.rule=Host(`ollama.domain.com`)"
+  #     - "traefik.http.routers.ollama.middlewares=https-redirect@file"
+  #     - "traefik.http.routers.ollama-secure.entrypoints=https"
+  #     - "traefik.http.routers.ollama-secure.rule=Host(`ollama.domain.com`)"
+  #     - "traefik.http.routers.ollama-secure.tls=true"
+  #     - "traefik.http.routers.ollama-secure.tls.certresolver=step-ca"
+  #     - "traefik.http.services.ollama.loadbalancer.server.port=11434"
+  #     - "traefik.docker.network=traefik_default"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+
+  # llama-swap service for swapping out LLM backends (alternative to open-webui)
+  # llama-swap:
+  #   image: ghcr.io/mostlygeek/llama-swap:cuda
+  #   container_name: llama-swap
+  #   env_file:
+  #     - ./llama-swap/.env
+  #   networks:
+  #     - backend
+  #     - traefik_default
+  #   volumes:
+  #     - ./llama-swap/config.yaml:/app/config.yaml
+  #     - ./llama-swap/data:/app/data
+  #     - ./llama-swap/models:/app/models
+  #   restart: unless-stopped
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.llama-swap.entrypoints=http"
+  #     - "traefik.http.routers.llama-swap.rule=Host(`llama-swap.domain.com`)"
+  #     - "traefik.http.routers.llama-swap.middlewares=https-redirect@file"
+  #     - "traefik.http.routers.llama-swap-secure.entrypoints=https"
+  #     - "traefik.http.routers.llama-swap-secure.rule=Host(`llama-swap.domain.com`)"
+  #     - "traefik.http.routers.llama-swap-secure.tls=true"
+  #     - "traefik.http.routers.llama-swap-secure.tls.certresolver=step-ca"
+  #     - "traefik.http.services.llama-swap.loadbalancer.server.port=8080"
+  #     - "traefik.docker.network=traefik_default"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+
+  # llama-cpp service for local LLMs (alternative to ollama)
+  llama-cpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: llama-cpp
+    env_file:
+      - ./llama-cpp/.env
+    networks:
+      - backend
+      - traefik_default
+    volumes:
+      - ./llama-cpp/models:/app/models
+    restart: unless-stopped
+    ipc: host
+    command: >
+      -m /app/models/Qwen3.5-9B-Q6_K.gguf
+      --mmproj /app/models/mmproj-Qwen3.5-9B-BF16.gguf
+      --flash-attn on
+      --ctx-size 8192
+      -ngl 99
+      --cache-type-k q8_0
+      --cache-type-v q4_0
+      -t 2
+      --sleep-idle-seconds 600
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.llama-cpp.entrypoints=http"
+      - "traefik.http.routers.llama-cpp.rule=Host(`llama-cpp.domain.com`)"
+      - "traefik.http.routers.llama-cpp.middlewares=https-redirect@file"
+      - "traefik.http.routers.llama-cpp-secure.entrypoints=https"
+      - "traefik.http.routers.llama-cpp-secure.rule=Host(`llama-cpp.domain.com`)"
+      - "traefik.http.routers.llama-cpp-secure.tls=true"
+      - "traefik.http.routers.llama-cpp-secure.tls.certresolver=step-ca"
+      - "traefik.http.services.llama-cpp.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_default"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+
+  # paperless-ai service
+  paperless-ai:
+    image: clusterzx/paperless-ai:latest
+    container_name: paperless-ai
+    restart: unless-stopped
+    depends_on:
+      # - ollama
+      - llama-cpp
+      - paperless
+    networks:
+      - backend
+      - traefik_default
+    env_file:
+      - ./paperless-ai/.env
+    volumes:
+      - ./paperless-ai/data:/app/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless-ai.entrypoints=http"
+      - "traefik.http.routers.paperless-ai.rule=Host(`paperless-ai.domain.com`)"
+      - "traefik.http.routers.paperless-ai.middlewares=https-redirect@file"
+      - "traefik.http.routers.paperless-ai-secure.entrypoints=https"
+      - "traefik.http.routers.paperless-ai-secure.rule=Host(`paperless-ai.domain.com`)"
+      - "traefik.http.routers.paperless-ai-secure.tls=true"
+      - "traefik.http.routers.paperless-ai-secure.tls.certresolver=step-ca"
+      - "traefik.http.services.paperless-ai.loadbalancer.server.port=3000"
+      - "traefik.docker.network=traefik_default"
+
+
+  # paperless-gpt service
+  paperless-gpt:
+    image: icereed/paperless-gpt:latest
+    container_name: paperless-gpt
+    restart: unless-stopped
+    depends_on:
+      # - ollama
+      - llama-cpp
+      - paperless
+    networks:
+      - backend
+      - traefik_default
+    env_file:
+      - ./paperless-gpt/.env
+    volumes:
+      - ./paperless-gpt/prompts:/app/prompts # Mount the prompts directory
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless-gpt.entrypoints=http"
+      - "traefik.http.routers.paperless-gpt.rule=Host(`paperless-gpt.domain.com`)"
+      - "traefik.http.routers.paperless-gpt.middlewares=https-redirect@file"
+      - "traefik.http.routers.paperless-gpt-secure.entrypoints=https"
+      - "traefik.http.routers.paperless-gpt-secure.rule=Host(`paperless-gpt.domain.com`)"
+      - "traefik.http.routers.paperless-gpt-secure.tls=true"
+      - "traefik.http.routers.paperless-gpt-secure.tls.certresolver=step-ca"
+      - "traefik.http.services.paperless-gpt.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_default"
+
+
+  # optional but helpful log viewer
+  dozzle:
+    image: amir20/dozzle:latest
+    restart: unless-stopped
+    container_name: dozzle
+    env_file: 
+      - ./dozzle/.env
+    networks:
+      - backend
+      - traefik_default
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dozzle/data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dozzle.entrypoints=http"
+      - "traefik.http.routers.dozzle.rule=Host(`dozzle.domain.com`)"
+      - "traefik.http.routers.dozzle.middlewares=https-redirect@file"
+      - "traefik.http.routers.dozzle-secure.entrypoints=https"
+      - "traefik.http.routers.dozzle-secure.rule=Host(`dozzle.domain.com`)"
+      - "traefik.http.routers.dozzle-secure.tls=true"
+      - "traefik.http.routers.dozzle-secure.tls.certresolver=step-ca"
+      - "traefik.http.services.dozzle.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_default"
+
+networks:
+  backend:
+    external: false
+  traefik_default:
+    driver: bridge
+    external: true

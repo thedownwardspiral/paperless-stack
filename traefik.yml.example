@@ -1,0 +1,39 @@
+global:
+  sendAnonymousUsage: false
+
+log:
+  # If something goes wrong, changing this to `DEBUG` might help you finding
+  # out what happens.
+  level: "INFO" #DEBUG, INFO, WARN, ERROR, FATAL, PANIC
+  format: "common"
+
+entryPoints:
+  http:
+    address: ":80"
+  https:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+  file:
+    filename: "/etc/traefik/traefik.dynamic.yml"
+    watch: true
+
+serversTransport:
+  rootCAs:
+        - /etc/step/step-chain.crt
+        - /etc/step/step-root-ca.crt
+
+certificatesResolvers:
+  step-ca:
+    acme:
+      email: name@domain.com
+      storage: /etc/traefik/acme/acme.json
+      caServer: "https://acme.domain.com/acme/domain/directory"
+      httpChallenge:
+        entryPoint: http
+
+api:
+  dashboard: true
