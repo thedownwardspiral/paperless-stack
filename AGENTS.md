@@ -111,6 +111,35 @@ When changing setup/behavior, update `README.md` with:
 - When a container gains a second or third router, Traefik may serve 404 until it reloads the container's config; `docker compose restart traefik` settles it. Check `docker logs traefik_v3` with `log.level: DEBUG` in `traefik/traefik.yml` before assuming the labels are wrong — the "Configuration received" line prints every router Traefik actually built.
 - Exports go to `./paperless/export/`. Formula-leading cells are escaped in `export_csv`; keep that if you touch the CSV writer.
 
+### Scaling up on better hardware
+
+Four settings are coupled to llama-cpp's **per-slot** context, which is `--ctx-size / --parallel`. Today that is `32768 / 4 = 8192` tokens on an RTX 5060 Ti 16 GB, with the model + mmproj occupying ~9.6 GB and ~6.3 GB free.
+
+| Setting | Where | Today | Constraint |
+| ------- | ----- | ----- | ---------- |
+| `--ctx-size` / `--parallel` | `compose.yaml` llama-cpp | 32768 / 4 | VRAM. Verify with `nvidia-smi` after the model loads, not before. |
+| `PAPERLESS_AI_LLM_CONTEXT_SIZE` | `paperless/.env` | 8192 | Must not exceed per-slot context. |
+| `OPENAI_CONTEXT_LENGTH` | `paperless-gpt/.env` | 8192 | Same. |
+| `MAX_CONTENT_CHARS` | `paperless-tools/.env` | 6000 | See fan-out math below. |
+
+The binding constraint on `MAX_CONTENT_CHARS` is not one call, it is a turn. The model issues **parallel** `get_document_content` calls — 9 in a single turn on this stack — and ignores the "read one at a time" instruction in the tool docstring. So budget:
+
+```
+worst_case_tokens ≈ (parallel_calls × MAX_CONTENT_CHARS) / 4    # ~4 chars per token
+```
+
+That must fit the per-slot context alongside the system prompt, tool schemas and conversation. At 9 × 6000 chars ≈ 13.5k tokens this is already optimistic for an 8192 window; it holds only because these register pages are ~2.5k characters, well under the cap. Longer documents would truncate silently, which reads as hallucination rather than overflow.
+
+When raising any of these:
+
+1. Raise `--ctx-size` first and confirm VRAM headroom with the model loaded.
+2. Raise `PAPERLESS_AI_LLM_CONTEXT_SIZE` and `OPENAI_CONTEXT_LENGTH` to the new per-slot value.
+3. Raise `MAX_CONTENT_CHARS` last, and keep the fan-out math above satisfied.
+
+A larger model is likely to follow the read-one-at-a-time instruction better and to align OCR table columns more reliably — the parent/sponsor transposition seen in exports is a model limitation, not a pipeline bug. Neither improves by tuning the settings above.
+
+`llama-swap` only becomes worth reconsidering when the models you want cannot coexist in VRAM; with headroom, a second static llama-cpp container is simpler and avoids swap latency during batch OCR. See the trade-off recorded in the batch-tuning section.
+
 ## llama.cpp Batch-Tuning (live `compose.yaml`)
 
 The live `compose.yaml` runs llama-cpp with a config tuned for batch PDF→CSV/XLSX throughput via paperless-gpt's image-mode OCR. Validated on this host (RTX 5060 Ti 16 GB, Ryzen 7 PRO 6850H 8C/16T, 22 GiB RAM); ~3.6× over the prior single-slot default (2 min → 33 s baseline). Do not regress these flags without re-benchmarking.

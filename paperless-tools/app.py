@@ -22,9 +22,11 @@ from pydantic import Field
 PAPERLESS_URL = os.environ.get("PAPERLESS_URL", "http://paperless:8000").rstrip("/")
 PAPERLESS_TOKEN = os.environ.get("PAPERLESS_TOKEN", "")
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "/export"))
-# Keep tool output inside the model's context window. llama-cpp runs 8192
-# tokens per slot, so ~24k characters of document text is already generous.
-MAX_CONTENT_CHARS = int(os.environ.get("MAX_CONTENT_CHARS", "24000"))
+# Keep tool output inside the model's context window. Size this for a fan-out,
+# not a single call: the model issues parallel get_document_content calls
+# (observed 9 in one turn) regardless of the "read one at a time" instruction
+# below, and llama-cpp only has 8192 tokens per slot.
+MAX_CONTENT_CHARS = int(os.environ.get("MAX_CONTENT_CHARS", "6000"))
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "50"))
 PREVIEW_ROWS = 10
 
