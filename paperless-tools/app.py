@@ -235,31 +235,82 @@ def export_csv(request: ExportRequest) -> ExportResponse:
     stem = re.sub(r"[^A-Za-z0-9_-]+", "-", Path(request.filename).stem).strip("-")
     if not stem:
         stem = "export"
-    name = f"{stem}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
-    target = EXPORT_DIR / name
+
+    # Sanitize once, so the header row, the returned columns and the preview
+    # shown in chat all describe the same file. Headers are user/model supplied
+    # just like the cells, so they get the same treatment, and rows are re-keyed
+    # to the sanitized headers to keep the response internally consistent.
+    # For ordinary headers this is a no-op, so nothing changes.
+    columns = _unique_headers(request.columns)
+    rows = [
+        {
+            sanitized: _sanitize(row.get(original, ""))
+            for original, sanitized in zip(request.columns, columns)
+        }
+        for row in request.rows
+    ]
 
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    with target.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=request.columns,
-            extrasaction="ignore",
-            restval="",
-        )
-        writer.writeheader()
-        for row in request.rows:
-            writer.writerow({k: _sanitize(v) for k, v in row.items()})
+    target, handle = _open_new_csv(stem)
+    with handle:
+        writer = csv.writer(handle)
+        writer.writerow(columns)
+        for row in rows:
+            writer.writerow([row[column] for column in columns])
 
     return ExportResponse(
-        file=name,
-        row_count=len(request.rows),
-        columns=request.columns,
-        preview=request.rows[:PREVIEW_ROWS],
+        file=target.name,
+        row_count=len(rows),
+        columns=columns,
+        preview=rows[:PREVIEW_ROWS],
         message=(
-            f"Wrote {len(request.rows)} rows to {name} in the Paperless export "
+            f"Wrote {len(rows)} rows to {target.name} in the Paperless export "
             f"directory. Show the user the preview rows and tell them the filename."
         ),
     )
+
+
+def _unique_headers(columns: list[str]) -> list[str]:
+    """Sanitize column headers while keeping them distinct.
+
+    Sanitizing can map two different headers onto the same string - both
+    ``=name`` and ``'=name`` become ``'=name`` - and rows are keyed by header,
+    so a collision would silently drop one column's data. Duplicates the caller
+    sent verbatim have the same problem. Disambiguate with a numeric suffix
+    instead, looping in case the suffixed name also collides.
+    """
+    used: set[str] = set()
+    headers: list[str] = []
+    for column in columns:
+        base = _sanitize(column)
+        name = base
+        attempt = 1
+        while name in used:
+            attempt += 1
+            name = f"{base}-{attempt}"
+        used.add(name)
+        headers.append(name)
+    return headers
+
+
+def _open_new_csv(stem: str) -> tuple[Path, Any]:
+    """Create a CSV that cannot clobber an existing one.
+
+    Timestamps are second-granular and the model issues tool calls in
+    parallel - nine within one second has been observed - so two exports
+    landing in the same second is realistic rather than theoretical. Opening
+    with "x" makes the check-and-create atomic, so concurrent requests cannot
+    both claim the same name.
+    """
+    base = f"{stem}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    attempt = 1
+    while True:
+        suffix = "" if attempt == 1 else f"-{attempt}"
+        candidate = EXPORT_DIR / f"{base}{suffix}.csv"
+        try:
+            return candidate, candidate.open("x", newline="", encoding="utf-8")
+        except FileExistsError:
+            attempt += 1
 
 
 def _sanitize(value: Any) -> Any:
