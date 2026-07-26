@@ -7,7 +7,7 @@ This file defines how automated coding agents should work in this repository.
 - Project type: Docker Compose stack for Paperless-ngx with local AI services.
 - Main entrypoint: `compose.yaml` (not tracked; `compose.yaml.example` is the tracked template)
 - Core services: `paperless`, `postgres`, `valkey`, `gotenberg`, `tika`
-- AI services: `llama-cpp` (LLM backend), `paperless-gpt` (vision-LLM OCR)
+- AI services: `llama-cpp` (LLM backend), `paperless-gpt` (vision-LLM OCR), `open-webui` (conversational UI), `paperless-tools` (OpenAPI tool server)
 - Infrastructure: `traefik` (reverse proxy with TLS)
 - Utility service: `dozzle`
 - Commented-out alternatives in compose.yaml.example: `ollama`, `open-webui`, `llama-swap`
@@ -93,6 +93,17 @@ When changing setup/behavior, update `README.md` with:
 - llama-cpp is the active LLM backend. Model GGUF files go in `./llama-cpp/models/`.
 - Keep model references consistent between `compose.yaml.example` and service `.env.example` files. The `LLM_MODEL` / `VISION_LLM_MODEL` strings in `paperless-gpt/.env` must match the GGUF filename mounted in `llama-cpp/models/`. (llama-server tolerates a mismatch when only one model is loaded, but logs mislabel the model.)
 - Avoid assumptions about GPU availability; do not remove existing GPU config unless requested.
+
+## Notes for the Conversational UI (`open-webui` + `paperless-tools`)
+
+- Built-in Paperless chat retrieves at most 5 chunks (`CHAT_RETRIEVER_TOP_K`, hardcoded upstream, not a setting). Anything needing corpus-wide coverage — counts, "list every", cross-document comparison — must go through `paperless-tools`, not RAG.
+- `paperless-tools` is the only place to add new capabilities for the chat UI. It is a FastAPI app; Open WebUI consumes its `/openapi.json`, and `operation_id` becomes the tool name the model sees.
+- Tool docstrings and field descriptions are prompt surface, not just documentation — the model chooses tools from them. Edit them with that in mind.
+- Keep the tool count small. A 9B model degrades quickly past a handful of tools.
+- Tool responses must stay inside the model's context window; `MAX_CONTENT_CHARS` and `MAX_SEARCH_RESULTS` cap them. Raising them past llama-cpp's per-slot context will truncate conversations.
+- `paperless-tools` is internal-only by design (no Traefik labels). Open WebUI reaches it over the `backend` network.
+- Open WebUI settings are **PersistentConfig**: env vars seed the database on first boot and are ignored afterward. A setting that will not change from `.env` must be changed in the admin UI.
+- Exports go to `./paperless/export/`. Formula-leading cells are escaped in `export_csv`; keep that if you touch the CSV writer.
 
 ## llama.cpp Batch-Tuning (live `compose.yaml`)
 
