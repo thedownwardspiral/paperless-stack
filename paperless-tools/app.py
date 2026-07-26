@@ -281,7 +281,10 @@ def _lookup_names(client: httpx.Client) -> dict[str, dict[int, str]]:
     return lookups
 
 
-@app.get("/health", operation_id="health", summary="Liveness probe")
+# Excluded from the OpenAPI schema on purpose: Open WebUI turns every
+# advertised operation into a tool the model can pick, and a liveness probe is
+# only noise in that list.
+@app.get("/health", include_in_schema=False)
 def health() -> dict[str, str]:
     """Report whether the tool server can reach Paperless."""
     try:
