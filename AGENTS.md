@@ -100,7 +100,7 @@ When changing setup/behavior, update `README.md` with:
 - `paperless-tools` is the only place to add new capabilities for the chat UI. It is a FastAPI app; Open WebUI consumes its `/openapi.json`, and `operation_id` becomes the tool name the model sees.
 - Tool docstrings and field descriptions are prompt surface, not just documentation — the model chooses tools from them. Edit them with that in mind.
 - Keep the tool count small. A 9B model degrades quickly past a handful of tools.
-- Tool responses must stay inside the model's context window; `MAX_CONTENT_CHARS` and `MAX_SEARCH_RESULTS` cap them. Raising them past llama-cpp's per-slot context will truncate conversations.
+- Tool responses must stay inside the model's context window; `MAX_CONTENT_CHARS` and `MAX_SEARCH_RESULTS` cap them. Budget against llama-cpp's whole `--ctx-size`, not a per-slot share, and remember the export payloads the model writes back compete for the same budget.
 - `paperless-tools` is internal-only by design (no Traefik labels). Open WebUI reaches it over the `backend` network.
 - Open WebUI settings are **PersistentConfig**: env vars seed the database on first boot and are ignored afterward, silently. A setting that will not change from `.env` must be changed in the admin UI. This has bitten both `OPENAI_API_BASE_URL` and `ENABLE_SIGNUP` on this stack, because `./open-webui/data/webui.db` predates the current configuration.
 - To check what Open WebUI is actually configured with, read its config table directly rather than trusting `.env`:
@@ -168,6 +168,6 @@ Companion setting in `paperless-gpt/.env`:
 
 Re-tuning guidance:
 
-- Single-request low-latency chat: drop `--parallel` to 1, raise per-slot ctx, drop `--cache-idle-slots`.
+- Single-request low-latency chat: drop `--parallel` to 1, raise `--ctx-size`, drop `--cache-idle-slots`.
 - More concurrency: bump `--parallel` only after verifying VRAM headroom with `nvidia-smi` post-load.
 - Different hardware: re-derive thread count from physical cores and ctx from VRAM budget. Do not blindly copy these flags.
