@@ -7,7 +7,7 @@ This file defines how automated coding agents should work in this repository.
 - Project type: Docker Compose stack for Paperless-ngx with local AI services.
 - Main entrypoint: `compose.yaml` (not tracked; `compose.yaml.example` is the tracked template)
 - Core services: `paperless`, `postgres`, `valkey`, `gotenberg`, `tika`
-- AI services: `llama-cpp` (LLM backend), `paperless-gpt` (vision-LLM OCR)
+- AI services: `llama-cpp` (LLM backend), `paperless-gpt` (vision-LLM OCR), `open-webui` (conversational UI), `paperless-tools` (OpenAPI tool server)
 - Infrastructure: `traefik` (reverse proxy with TLS)
 - Utility service: `dozzle`
 - Commented-out alternatives in compose.yaml.example: `ollama`, `open-webui`, `llama-swap`
@@ -93,6 +93,52 @@ When changing setup/behavior, update `README.md` with:
 - llama-cpp is the active LLM backend. Model GGUF files go in `./llama-cpp/models/`.
 - Keep model references consistent between `compose.yaml.example` and service `.env.example` files. The `LLM_MODEL` / `VISION_LLM_MODEL` strings in `paperless-gpt/.env` must match the GGUF filename mounted in `llama-cpp/models/`. (llama-server tolerates a mismatch when only one model is loaded, but logs mislabel the model.)
 - Avoid assumptions about GPU availability; do not remove existing GPU config unless requested.
+
+## Notes for the Conversational UI (`open-webui` + `paperless-tools`)
+
+- Built-in Paperless chat retrieves at most 5 chunks (`CHAT_RETRIEVER_TOP_K`, hardcoded upstream, not a setting). Anything needing corpus-wide coverage — counts, "list every", cross-document comparison — must go through `paperless-tools`, not RAG.
+- `paperless-tools` is the only place to add new capabilities for the chat UI. It is a FastAPI app; Open WebUI consumes its `/openapi.json`, and `operation_id` becomes the tool name the model sees.
+- Tool docstrings and field descriptions are prompt surface, not just documentation — the model chooses tools from them. Edit them with that in mind.
+- Keep the tool count small. A 9B model degrades quickly past a handful of tools.
+- Tool responses must stay inside the model's context window; `MAX_CONTENT_CHARS` and `MAX_SEARCH_RESULTS` cap them. Raising them past llama-cpp's per-slot context will truncate conversations.
+- `paperless-tools` is internal-only by design (no Traefik labels). Open WebUI reaches it over the `backend` network.
+- Open WebUI settings are **PersistentConfig**: env vars seed the database on first boot and are ignored afterward, silently. A setting that will not change from `.env` must be changed in the admin UI. This has bitten both `OPENAI_API_BASE_URL` and `ENABLE_SIGNUP` on this stack, because `./open-webui/data/webui.db` predates the current configuration.
+- To check what Open WebUI is actually configured with, read its config table directly rather than trusting `.env`:
+  `sqlite3 open-webui/data/webui.db "select key, value from config where key like 'openai.%'"`
+  Tool server connections live under the `tool_server.connections` key.
+- Open WebUI relies on its own account auth; `traefik-auth@file` is intentionally **not** applied to it. Do not add basicAuth in front of it without also exempting `/ws`: WebSocket handshakes carry no cached Basic credentials, so socket.io 401s and retries forever, which the user sees as an endless browser auth prompt.
+- Services with no authentication of their own (`dozzle`, `paperless-gpt`, and `llama-cpp` if its route is fixed) currently answer unauthenticated requests. `traefik-auth@file` is the right tool there — they are not SPAs and have no login of their own.
+- When a container gains a second or third router, Traefik may serve 404 until it reloads the container's config; `docker compose restart traefik` settles it. Check `docker logs traefik_v3` with `log.level: DEBUG` in `traefik/traefik.yml` before assuming the labels are wrong — the "Configuration received" line prints every router Traefik actually built.
+- Exports go to `./paperless/export/`. Formula-leading cells are escaped in `export_csv`; keep that if you touch the CSV writer.
+
+### Scaling up on better hardware
+
+Four settings are coupled to llama-cpp's **per-slot** context, which is `--ctx-size / --parallel`. Today that is `32768 / 4 = 8192` tokens on an RTX 5060 Ti 16 GB, with the model + mmproj occupying ~9.6 GB and ~6.3 GB free.
+
+| Setting | Where | Today | Constraint |
+| ------- | ----- | ----- | ---------- |
+| `--ctx-size` / `--parallel` | `compose.yaml` llama-cpp | 32768 / 4 | VRAM. Verify with `nvidia-smi` after the model loads, not before. |
+| `PAPERLESS_AI_LLM_CONTEXT_SIZE` | `paperless/.env` | 8192 | Must not exceed per-slot context. |
+| `OPENAI_CONTEXT_LENGTH` | `paperless-gpt/.env` | 8192 | Same. |
+| `MAX_CONTENT_CHARS` | `paperless-tools/.env` | 6000 | See fan-out math below. |
+
+The binding constraint on `MAX_CONTENT_CHARS` is not one call, it is a turn. The model issues **parallel** `get_document_content` calls — 9 in a single turn on this stack — and ignores the "read one at a time" instruction in the tool docstring. So budget:
+
+```
+worst_case_tokens ≈ (parallel_calls × MAX_CONTENT_CHARS) / 4    # ~4 chars per token
+```
+
+That must fit the per-slot context alongside the system prompt, tool schemas and conversation. At 9 × 6000 chars ≈ 13.5k tokens this is already optimistic for an 8192 window; it holds only because these register pages are ~2.5k characters, well under the cap. Longer documents would truncate silently, which reads as hallucination rather than overflow.
+
+When raising any of these:
+
+1. Raise `--ctx-size` first and confirm VRAM headroom with the model loaded.
+2. Raise `PAPERLESS_AI_LLM_CONTEXT_SIZE` and `OPENAI_CONTEXT_LENGTH` to the new per-slot value.
+3. Raise `MAX_CONTENT_CHARS` last, and keep the fan-out math above satisfied.
+
+A larger model is likely to follow the read-one-at-a-time instruction better and to align OCR table columns more reliably — the parent/sponsor transposition seen in exports is a model limitation, not a pipeline bug. Neither improves by tuning the settings above.
+
+`llama-swap` only becomes worth reconsidering when the models you want cannot coexist in VRAM; with headroom, a second static llama-cpp container is simpler and avoids swap latency during batch OCR. See the trade-off recorded in the batch-tuning section.
 
 ## llama.cpp Batch-Tuning (live `compose.yaml`)
 

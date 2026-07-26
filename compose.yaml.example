@@ -114,32 +114,57 @@ services:
       - backend
   
 
-  # open-webui service for LLM interaction
-  # open-webui:
-  #   image: ghcr.io/open-webui/open-webui:latest
-  #   container_name: open-webui
-  #   restart: unless-stopped
-  #   env_file:
-  #     - ./open-webui/.env
-  #   depends_on:
-  #     # - ollama
-  #     - llama-cpp
-  #   networks:
-  #     - backend
-  #     - traefik_default
-  #   volumes:
-  #     - ./open-webui/data:/app/backend/data
-  #   labels:
-  #     - "traefik.enable=true"
-  #     - "traefik.http.routers.open-webui.entrypoints=http"
-  #     - "traefik.http.routers.open-webui.rule=Host(`open-webui.domain.com`)"
-  #     - "traefik.http.routers.open-webui.middlewares=https-redirect@file"
-  #     - "traefik.http.routers.open-webui-secure.entrypoints=https"
-  #     - "traefik.http.routers.open-webui-secure.rule=Host(`open-webui.domain.com`)"
-  #     - "traefik.http.routers.open-webui-secure.tls=true"
-  #     - "traefik.http.routers.open-webui-secure.tls.certresolver=step-ca"
-  #     - "traefik.http.services.open-webui.loadbalancer.server.port=8080"
-  #     - "traefik.docker.network=traefik_default"
+  # open-webui: conversational front end for querying documents.
+  # Unlike Paperless-ngx's built-in chat (which retrieves at most 5 vector
+  # chunks), this drives the model with tool calls against paperless-tools, so
+  # it sees complete query results and can export them to CSV.
+  # Requires llama-cpp's --jinja flag for tool calling.
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:latest
+    container_name: open-webui
+    restart: unless-stopped
+    env_file:
+      - ./open-webui/.env
+    depends_on:
+      # - ollama
+      - llama-cpp
+      - paperless-tools
+    networks:
+      - backend
+      - traefik_default
+    volumes:
+      - ./open-webui/data:/app/backend/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.open-webui.entrypoints=http"
+      - "traefik.http.routers.open-webui.rule=Host(`open-webui.domain.com`)"
+      - "traefik.http.routers.open-webui.middlewares=https-redirect@file"
+      - "traefik.http.routers.open-webui.service=open-webui"
+      - "traefik.http.routers.open-webui-secure.entrypoints=https"
+      - "traefik.http.routers.open-webui-secure.rule=Host(`open-webui.domain.com`)"
+      - "traefik.http.routers.open-webui-secure.tls=true"
+      - "traefik.http.routers.open-webui-secure.tls.certresolver=step-ca"
+      - "traefik.http.routers.open-webui-secure.service=open-webui"
+      - "traefik.http.services.open-webui.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_default"
+
+  # paperless-tools: OpenAPI tool server that Open WebUI calls.
+  # Exposes keyword search, full document text, and CSV export against the
+  # Paperless API. Internal only - Open WebUI reaches it over the backend
+  # network, so it is deliberately not routed through Traefik.
+  paperless-tools:
+    build: ./paperless-tools
+    container_name: paperless-tools
+    restart: unless-stopped
+    env_file:
+      - ./paperless-tools/.env
+    depends_on:
+      - paperless
+    networks:
+      - backend
+    volumes:
+      # export_csv writes here; same directory Paperless exports into
+      - ./paperless/export:/export
 
   # ollama service for local LLMs
   # ollama:
