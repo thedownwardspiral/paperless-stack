@@ -35,6 +35,12 @@ paperless/consume/*
 ollama/models/*
 !ollama/models/.gitkeep
 
+traefik/acme/*
+!traefik/acme/.gitkeep
+
+traefik/certs/*
+!traefik/certs/.gitkeep
+
 # ------------------------------
 # Logs and temp files
 # ------------------------------
@@ -49,6 +55,9 @@ ollama/models/*
 # ------------------------------
 .vscode/
 .idea/
+
+# Claude Code
+.claude/
 *.iml
 *.suo
 *.user
@@ -84,6 +93,6 @@ acme.json
 *.gguf
 *.crt
 *.tmpl
-traefik.dynamic.yml
-traefik.yml
+traefik/traefik.dynamic.yml
+traefik/traefik.yml
 compose.yaml

@@ -6,8 +6,8 @@ This file defines how automated coding agents should work in this repository.
 
 - Project type: Docker Compose stack for Paperless-ngx with local AI services.
 - Main entrypoint: `compose.yaml` (not tracked; `compose.yaml.example` is the tracked template)
-- Core services: `paperless`, `postgres`, `redis`, `gotenberg`, `tika`
-- AI services: `llama-cpp`, `paperless-ai`, `paperless-gpt`
+- Core services: `paperless`, `postgres`, `valkey`, `gotenberg`, `tika`
+- AI services: `llama-cpp` (LLM backend), `paperless-gpt` (vision-LLM OCR)
 - Infrastructure: `traefik` (reverse proxy with TLS)
 - Utility service: `dozzle`
 - Commented-out alternatives in compose.yaml.example: `ollama`, `open-webui`, `llama-swap`
@@ -18,9 +18,11 @@ This is a fork of timothystewart6/paperless-stack. Notable changes:
 
 - **llama.cpp** is the active LLM backend (replaces Ollama + Open WebUI)
 - **Traefik** reverse proxy handles routing and TLS — services are not exposed on localhost ports
-- **paperless-ai** uses the `custom` AI provider pointing to llama-cpp's OpenAI-compatible API
+- **Native paperless-ngx AI** (v3+) points at llama-cpp's OpenAI-compatible API; `paperless-ai` was removed as redundant
+- **valkey** is the broker (matches upstream v3 compose); the old `./redis/` directory is no longer referenced
 - `compose.yaml` is gitignored (contains environment-specific hostnames); only `compose.yaml.example` is tracked
-- `traefik.yml` and `traefik.dynamic.yml` are gitignored; example files are tracked
+- `traefik/traefik.yml` and `traefik/traefik.dynamic.yml` are gitignored; example files are tracked
+- Every service owns a top-level directory (`paperless/`, `postgres/`, `valkey/`, `traefik/`, …) holding its `.env` plus any config and persistent state
 
 ## Primary Goals for Agents
 
@@ -33,7 +35,8 @@ This is a fork of timothystewart6/paperless-stack. Notable changes:
 
 - Do not delete or reset contents under `*/data/`, `paperless/media/`, `paperless/export/`, or `paperless/consume/`.
 - Do not commit secrets or real credentials. Only `.env.example` files are tracked; `.env` files are gitignored.
-- `compose.yaml`, `traefik.yml`, and `traefik.dynamic.yml` are gitignored. Edit the `.example` versions instead.
+- `compose.yaml`, `traefik/traefik.yml`, and `traefik/traefik.dynamic.yml` are gitignored. Edit the `.example` versions instead.
+- Do not delete `traefik/acme/acme.json` (issued certificates) or `traefik/certs/` (trusted CA bundle).
 - Prefer editing only files directly related to the user request.
 - Do not introduce unrelated refactors.
 
@@ -83,7 +86,37 @@ When changing setup/behavior, update `README.md` with:
 
 ## Notes for AI-Feature Changes
 
-- AI services are optional; maintain a working non-AI path.
+- AI services are optional; maintain a working non-AI path. Native AI is off unless `PAPERLESS_AI_ENABLED` is set.
+- Native paperless-ngx AI is configured entirely through `PAPERLESS_AI_*` in `paperless/.env`. Values set in the admin UI (Settings → Application Configuration) override the environment, so a setting that appears to be ignored is usually overridden in the database.
+- `PAPERLESS_AI_LLM_MODEL` must match the model id llama-server reports at `GET /v1/models` (the full container path, e.g. `/app/models/Qwen3.5-9B-UD-Q6_K_XL.gguf`).
+- `PAPERLESS_AI_LLM_CONTEXT_SIZE` must not exceed llama-cpp's per-slot context (`--ctx-size` / `--parallel`).
 - llama-cpp is the active LLM backend. Model GGUF files go in `./llama-cpp/models/`.
-- Keep model references consistent between `compose.yaml.example` and service `.env.example` files.
+- Keep model references consistent between `compose.yaml.example` and service `.env.example` files. The `LLM_MODEL` / `VISION_LLM_MODEL` strings in `paperless-gpt/.env` must match the GGUF filename mounted in `llama-cpp/models/`. (llama-server tolerates a mismatch when only one model is loaded, but logs mislabel the model.)
 - Avoid assumptions about GPU availability; do not remove existing GPU config unless requested.
+
+## llama.cpp Batch-Tuning (live `compose.yaml`)
+
+The live `compose.yaml` runs llama-cpp with a config tuned for batch PDF→CSV/XLSX throughput via paperless-gpt's image-mode OCR. Validated on this host (RTX 5060 Ti 16 GB, Ryzen 7 PRO 6850H 8C/16T, 22 GiB RAM); ~3.6× over the prior single-slot default (2 min → 33 s baseline). Do not regress these flags without re-benchmarking.
+
+Active flags and why:
+
+- `--ctx-size 32768 --parallel 4 --cont-batching` — 4 slots, 8192 ctx each. Per-slot ctx must match `OPENAI_CONTEXT_LENGTH` in `paperless-gpt/.env`.
+- `--kv-unified --cache-idle-slots` — single dynamic KV pool so large docs can borrow from idle slots; idle slot state is saved to prompt cache.
+- `--cache-type-k q8_0 --cache-type-v q8_0` — V-cache is q8_0, NOT q4_0. Workload contains PII and digit-level fidelity matters.
+- `--batch-size 2048 --ubatch-size 512` — prefill-dominated PDF text benefits from larger ubatch.
+- `-t 8 --threads-batch 8` — match physical cores; SMT siblings hurt on Zen 3+.
+- `--sleep-idle-seconds -1` — disabled. (`0` is rejected by llama.cpp; `-1` is the disable sentinel.)
+- `--jinja` — **required** for paperless-ngx native AI suggestions. They go through OpenAI tool calling (`tool_required=True`), and llama-server only emits `tool_calls` when the model's own chat template is used. Without it, llama-server returns a plain chat reply and paperless raises on "no tool call". Verified against this host: same request returns `reasoning_content` and no `tool_calls` when `--jinja` is absent.
+- `--reasoning off` — **required alongside `--jinja`**. Qwen3.5's own template enables thinking, and `--jinja` activates it. Measured on this host: a single suggestion request ran past 4,500 reasoning tokens with no tool call in sight (well beyond `PAPERLESS_AI_LLM_REQUEST_TIMEOUT`). With reasoning off, the same request returns a tool call in ~22 s. Also removes thinking output from paperless-gpt's OCR responses.
+- `--mmproj <projector>.gguf` — vision projector required because paperless-gpt uses image OCR mode. Filename is host-specific; match whatever projector sits in `llama-cpp/models/` (the live host uses `mmproj-F16.gguf`, `compose.yaml.example` ships a placeholder name).
+- `cpuset: "0,2,4,6,8,10,12,14"` + `mem_limit: 14g` — pin physical cores, cap RAM so the LLM can't OOM the rest of the stack.
+
+Companion setting in `paperless-gpt/.env`:
+
+- `OCR_PROCESS_MODE: "image"` — rasterizes PDF pages and sends them to the vision LLM ("Parse PDF as image", hardcoded on).
+
+Re-tuning guidance:
+
+- Single-request low-latency chat: drop `--parallel` to 1, raise per-slot ctx, drop `--cache-idle-slots`.
+- More concurrency: bump `--parallel` only after verifying VRAM headroom with `nvidia-smi` post-load.
+- Different hardware: re-derive thread count from physical cores and ctx from VRAM budget. Do not blindly copy these flags.
