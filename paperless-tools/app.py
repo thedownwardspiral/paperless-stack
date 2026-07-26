@@ -240,8 +240,8 @@ def export_csv(request: ExportRequest) -> ExportResponse:
     # shown in chat all describe the same file. Headers are user/model supplied
     # just like the cells, so they get the same treatment, and rows are re-keyed
     # to the sanitized headers to keep the response internally consistent.
-    # For ordinary headers sanitizing is a no-op, so this changes nothing.
-    columns = [_sanitize(column) for column in request.columns]
+    # For ordinary headers this is a no-op, so nothing changes.
+    columns = _unique_headers(request.columns)
     rows = [
         {
             sanitized: _sanitize(row.get(original, ""))
@@ -268,6 +268,29 @@ def export_csv(request: ExportRequest) -> ExportResponse:
             f"directory. Show the user the preview rows and tell them the filename."
         ),
     )
+
+
+def _unique_headers(columns: list[str]) -> list[str]:
+    """Sanitize column headers while keeping them distinct.
+
+    Sanitizing can map two different headers onto the same string - both
+    ``=name`` and ``'=name`` become ``'=name`` - and rows are keyed by header,
+    so a collision would silently drop one column's data. Duplicates the caller
+    sent verbatim have the same problem. Disambiguate with a numeric suffix
+    instead, looping in case the suffixed name also collides.
+    """
+    used: set[str] = set()
+    headers: list[str] = []
+    for column in columns:
+        base = _sanitize(column)
+        name = base
+        attempt = 1
+        while name in used:
+            attempt += 1
+            name = f"{base}-{attempt}"
+        used.add(name)
+        headers.append(name)
+    return headers
 
 
 def _open_new_csv(stem: str) -> tuple[Path, Any]:
