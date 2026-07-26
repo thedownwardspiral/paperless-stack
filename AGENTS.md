@@ -108,7 +108,7 @@ Active flags and why:
 - `--sleep-idle-seconds -1` — disabled. (`0` is rejected by llama.cpp; `-1` is the disable sentinel.)
 - `--jinja` — **required** for paperless-ngx native AI suggestions. They go through OpenAI tool calling (`tool_required=True`), and llama-server only emits `tool_calls` when the model's own chat template is used. Without it, llama-server returns a plain chat reply and paperless raises on "no tool call". Verified against this host: same request returns `reasoning_content` and no `tool_calls` when `--jinja` is absent.
 - `--reasoning off` — **required alongside `--jinja`**. Qwen3.5's own template enables thinking, and `--jinja` activates it. Measured on this host: a single suggestion request ran past 4,500 reasoning tokens with no tool call in sight (well beyond `PAPERLESS_AI_LLM_REQUEST_TIMEOUT`). With reasoning off, the same request returns a tool call in ~22 s. Also removes thinking output from paperless-gpt's OCR responses.
-- `--mmproj /app/models/mmproj-F16.gguf` — vision projector required because paperless-gpt uses image OCR mode.
+- `--mmproj <projector>.gguf` — vision projector required because paperless-gpt uses image OCR mode. Filename is host-specific; match whatever projector sits in `llama-cpp/models/` (the live host uses `mmproj-F16.gguf`, `compose.yaml.example` ships a placeholder name).
 - `cpuset: "0,2,4,6,8,10,12,14"` + `mem_limit: 14g` — pin physical cores, cap RAM so the LLM can't OOM the rest of the stack.
 
 Companion setting in `paperless-gpt/.env`:
