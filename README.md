@@ -155,7 +155,7 @@ Then ask normally: *"Find the document containing Kellera. Read it, then export 
 - Most Open WebUI settings are **PersistentConfig**: the environment seeds them on first boot, and after that the database wins. Changing the env later has no effect and no warning is logged. This applies to the model connection (`OPENAI_API_BASE_URL`) and to `ENABLE_SIGNUP`. Against an existing `./open-webui/data/webui.db`, set the model connection under **Admin Panel → Settings → Connections** (Base URL `http://llama-cpp:8080/v1`, Auth None, Provider llama.cpp) rather than in `.env`. A model selector stuck on "Select a model" is the usual symptom.
 - **Access control is Open WebUI's own**: accounts with signup disabled. There is deliberately no Traefik basicAuth in front of it. If you add one, it must not cover `/ws` — browsers do not attach cached Basic credentials to a WebSocket handshake, so socket.io gets a 401, retries with backoff, and re-triggers the browser's auth prompt on every attempt, which looks like the page asking for credentials endlessly.
 - Exported CSVs land in `./paperless/export/`. Cells beginning with `=`, `+`, `-` or `@` are prefixed with `'` to defuse spreadsheet formula injection.
-- The model transcribes from OCR text. Values are not invented, but **column alignment in dense tables is not guaranteed** — spot-check parent/sponsor columns against the source page before relying on a export.
+- The model transcribes from OCR text. Values are not invented, but **column alignment in dense tables is not guaranteed** — spot-check parent/sponsor columns against the source page before relying on an export.
 
 ## Upgrading from Paperless-ngx v2
 
