@@ -86,6 +86,8 @@ All services are routed through Traefik and are not exposed directly on localhos
 | Paperless-ngx | Document management with OCR, search, and native AI features |
 | llama-cpp | Local LLM inference via llama-server (CUDA) |
 | Paperless-GPT | Vision-LLM OCR for scanned documents |
+| Open WebUI | Conversational front end with tool calling and CSV export |
+| paperless-tools | OpenAPI tool server: document search, text, CSV export |
 | Dozzle | Real-time Docker log viewer |
 | PostgreSQL | Database for Paperless |
 | Valkey | Message broker for Paperless (Redis-protocol compatible) |
@@ -95,8 +97,7 @@ All services are routed through Traefik and are not exposed directly on localhos
 ### Commented-out alternatives (in compose.yaml.example)
 
 - **Ollama** — drop-in replacement for llama-cpp if you prefer Ollama's model management
-- **Open WebUI** — web UI for interacting with LLMs directly
-- **llama-swap** — hot-swaps between multiple GGUF models on demand
+- **llama-swap** — hot-swaps between multiple GGUF models on demand. Only worth it for models that cannot coexist in VRAM; it conflicts with keeping one model resident for batch OCR throughput.
 
 ## AI Features
 
@@ -124,6 +125,37 @@ docker compose exec paperless document_llmindex rebuild
 Settings changed in the admin UI (Settings → Application Configuration) take precedence over these environment variables.
 
 Document content is sent to whatever endpoint you configure. With the defaults here it never leaves the host.
+
+## Conversational document queries (Open WebUI + paperless-tools)
+
+Paperless-ngx's built-in chat retrieves at most **5 vector chunks** (`CHAT_RETRIEVER_TOP_K`, hardcoded upstream). That is enough for "what does this document say", but it cannot answer questions that need the whole corpus — "list every X", "how many Y" — and it cannot export anything.
+
+`open-webui` plus `paperless-tools` covers that case. The model calls real tools against the Paperless API, so it gets **complete** query results rather than a similarity sample, and can write CSV files.
+
+| Tool | Purpose |
+| ---- | ------- |
+| `search_documents` | Keyword/full-text search. Returns every match up to the limit, with a trustworthy result count. |
+| `get_document_content` | Full OCR text of one document. |
+| `export_csv` | Writes rows to a timestamped CSV in `./paperless/export/`, and returns a preview for display in chat. |
+
+### Setup
+
+1. Put your Paperless API token in `./paperless-tools/.env` (Profile > API Tokens > Generate).
+2. Set `WEBUI_SECRET_KEY` and `WEBUI_URL` in `./open-webui/.env`.
+3. Start them: `docker compose up -d --build paperless-tools open-webui`
+4. In Open WebUI: **Settings → Tools → Add Tool Server**, URL `http://paperless-tools:8000`. It advertises an OpenAPI spec, so the tools register themselves.
+5. Enable the tools on your model, and confirm the model is in Native (agentic) tool-calling mode.
+
+Then ask normally: *"Find the document containing Kellera. Read it, then export a CSV named baptisms with columns Name, DateOfBaptism, Father, Mother."*
+
+### Notes
+
+- **llama-cpp must run with `--jinja`.** Tool calling depends on it. `--reasoning off` is also required or the model burns thousands of thinking tokens first.
+- `paperless-tools` is **not** routed through Traefik. Open WebUI reaches it over the `backend` network. If your Open WebUI version fetches tool specs from the browser rather than the server, you will need to add Traefik labels for it.
+- Most Open WebUI settings are **PersistentConfig**: the environment seeds them on first boot, and after that the database wins. Changing the env later has no effect and no warning is logged. This applies to the model connection (`OPENAI_API_BASE_URL`) and to `ENABLE_SIGNUP`. Against an existing `./open-webui/data/webui.db`, set the model connection under **Admin Panel → Settings → Connections** (Base URL `http://llama-cpp:8080/v1`, Auth None, Provider llama.cpp) rather than in `.env`. A model selector stuck on "Select a model" is the usual symptom.
+- **Access control is Open WebUI's own**: accounts with signup disabled. There is deliberately no Traefik basicAuth in front of it. If you add one, it must not cover `/ws` — browsers do not attach cached Basic credentials to a WebSocket handshake, so socket.io gets a 401, retries with backoff, and re-triggers the browser's auth prompt on every attempt, which looks like the page asking for credentials endlessly.
+- Exported CSVs land in `./paperless/export/`. Cells beginning with `=`, `+`, `-` or `@` are prefixed with `'` to defuse spreadsheet formula injection.
+- The model transcribes from OCR text. Values are not invented, but **column alignment in dense tables is not guaranteed** — spot-check parent/sponsor columns against the source page before relying on a export.
 
 ## Upgrading from Paperless-ngx v2
 
