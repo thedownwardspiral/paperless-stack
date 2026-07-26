@@ -255,7 +255,7 @@ services:
       --jinja
       --reasoning off
       --flash-attn on
-      --ctx-size 32768
+      --ctx-size 65536
       --parallel 4
       --cont-batching
       --kv-unified
