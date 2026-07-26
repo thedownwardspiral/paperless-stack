@@ -103,7 +103,8 @@ When changing setup/behavior, update `README.md` with:
 - Tool responses must stay inside the model's context window; `MAX_CONTENT_CHARS` and `MAX_SEARCH_RESULTS` cap them. Raising them past llama-cpp's per-slot context will truncate conversations.
 - `paperless-tools` is internal-only by design (no Traefik labels). Open WebUI reaches it over the `backend` network.
 - Open WebUI settings are **PersistentConfig**: env vars seed the database on first boot and are ignored afterward. A setting that will not change from `.env` must be changed in the admin UI.
-- Do not put `traefik-auth@file` (or any basicAuth) in front of `/ws`. WebSocket handshakes carry no cached Basic credentials, so socket.io 401s and retries forever, which the user sees as an endless browser auth prompt. The `open-webui-ws` router exists to exempt that path and must keep a higher `priority` than `open-webui-secure`.
+- Open WebUI relies on its own account auth; `traefik-auth@file` is intentionally **not** applied to it. Do not add basicAuth in front of it without also exempting `/ws`: WebSocket handshakes carry no cached Basic credentials, so socket.io 401s and retries forever, which the user sees as an endless browser auth prompt.
+- Services with no authentication of their own (`dozzle`, `paperless-gpt`, and `llama-cpp` if its route is fixed) currently answer unauthenticated requests. `traefik-auth@file` is the right tool there — they are not SPAs and have no login of their own.
 - When a container gains a second or third router, Traefik may serve 404 until it reloads the container's config; `docker compose restart traefik` settles it. Check `docker logs traefik_v3` with `log.level: DEBUG` in `traefik/traefik.yml` before assuming the labels are wrong — the "Configuration received" line prints every router Traefik actually built.
 - Exports go to `./paperless/export/`. Formula-leading cells are escaped in `export_csv`; keep that if you touch the CSV writer.
 
