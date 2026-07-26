@@ -102,7 +102,10 @@ When changing setup/behavior, update `README.md` with:
 - Keep the tool count small. A 9B model degrades quickly past a handful of tools.
 - Tool responses must stay inside the model's context window; `MAX_CONTENT_CHARS` and `MAX_SEARCH_RESULTS` cap them. Raising them past llama-cpp's per-slot context will truncate conversations.
 - `paperless-tools` is internal-only by design (no Traefik labels). Open WebUI reaches it over the `backend` network.
-- Open WebUI settings are **PersistentConfig**: env vars seed the database on first boot and are ignored afterward. A setting that will not change from `.env` must be changed in the admin UI.
+- Open WebUI settings are **PersistentConfig**: env vars seed the database on first boot and are ignored afterward, silently. A setting that will not change from `.env` must be changed in the admin UI. This has bitten both `OPENAI_API_BASE_URL` and `ENABLE_SIGNUP` on this stack, because `./open-webui/data/webui.db` predates the current configuration.
+- To check what Open WebUI is actually configured with, read its config table directly rather than trusting `.env`:
+  `sqlite3 open-webui/data/webui.db "select key, value from config where key like 'openai.%'"`
+  Tool server connections live under the `tool_server.connections` key.
 - Open WebUI relies on its own account auth; `traefik-auth@file` is intentionally **not** applied to it. Do not add basicAuth in front of it without also exempting `/ws`: WebSocket handshakes carry no cached Basic credentials, so socket.io 401s and retries forever, which the user sees as an endless browser auth prompt.
 - Services with no authentication of their own (`dozzle`, `paperless-gpt`, and `llama-cpp` if its route is fixed) currently answer unauthenticated requests. `traefik-auth@file` is the right tool there — they are not SPAs and have no login of their own.
 - When a container gains a second or third router, Traefik may serve 404 until it reloads the container's config; `docker compose restart traefik` settles it. Check `docker logs traefik_v3` with `log.level: DEBUG` in `traefik/traefik.yml` before assuming the labels are wrong — the "Configuration received" line prints every router Traefik actually built.
