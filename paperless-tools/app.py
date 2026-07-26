@@ -236,13 +236,17 @@ def export_csv(request: ExportRequest) -> ExportResponse:
     if not stem:
         stem = "export"
 
-    # Sanitize once, so the file on disk and the preview shown in chat agree.
-    # Headers are user/model supplied too, so they need the same treatment as
-    # the cells. Row keys stay as the caller wrote them to keep the preview
-    # readable; only the values change.
+    # Sanitize once, so the header row, the returned columns and the preview
+    # shown in chat all describe the same file. Headers are user/model supplied
+    # just like the cells, so they get the same treatment, and rows are re-keyed
+    # to the sanitized headers to keep the response internally consistent.
+    # For ordinary headers sanitizing is a no-op, so this changes nothing.
     columns = [_sanitize(column) for column in request.columns]
     rows = [
-        {column: _sanitize(row.get(column, "")) for column in request.columns}
+        {
+            sanitized: _sanitize(row.get(original, ""))
+            for original, sanitized in zip(request.columns, columns)
+        }
         for row in request.rows
     ]
 
@@ -252,7 +256,7 @@ def export_csv(request: ExportRequest) -> ExportResponse:
         writer = csv.writer(handle)
         writer.writerow(columns)
         for row in rows:
-            writer.writerow([row[column] for column in request.columns])
+            writer.writerow([row[column] for column in columns])
 
     return ExportResponse(
         file=target.name,
