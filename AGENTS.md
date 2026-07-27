@@ -89,7 +89,7 @@ When changing setup/behavior, update `README.md` with:
 - AI services are optional; maintain a working non-AI path. Native AI is off unless `PAPERLESS_AI_ENABLED` is set.
 - Native paperless-ngx AI is configured entirely through `PAPERLESS_AI_*` in `paperless/.env`. Values set in the admin UI (Settings → Application Configuration) override the environment, so a setting that appears to be ignored is usually overridden in the database.
 - `PAPERLESS_AI_LLM_MODEL` must match the model id llama-server reports at `GET /v1/models` (the full container path, e.g. `/app/models/Qwen3.5-9B-UD-Q6_K_XL.gguf`).
-- `PAPERLESS_AI_LLM_CONTEXT_SIZE` must not exceed llama-cpp's per-slot context (`--ctx-size` / `--parallel`).
+- `PAPERLESS_AI_LLM_CONTEXT_SIZE` must not exceed llama-cpp's `--ctx-size`. It is not divided by `--parallel`: `--kv-unified` lets a single request use the whole context when other slots are idle.
 - llama-cpp is the active LLM backend. Model GGUF files go in `./llama-cpp/models/`.
 - Keep model references consistent between `compose.yaml.example` and service `.env.example` files. The `LLM_MODEL` / `VISION_LLM_MODEL` strings in `paperless-gpt/.env` must match the GGUF filename mounted in `llama-cpp/models/`. (llama-server tolerates a mismatch when only one model is loaded, but logs mislabel the model.)
 - Avoid assumptions about GPU availability; do not remove existing GPU config unless requested.
@@ -100,7 +100,7 @@ When changing setup/behavior, update `README.md` with:
 - `paperless-tools` is the only place to add new capabilities for the chat UI. It is a FastAPI app; Open WebUI consumes its `/openapi.json`, and `operation_id` becomes the tool name the model sees.
 - Tool docstrings and field descriptions are prompt surface, not just documentation — the model chooses tools from them. Edit them with that in mind.
 - Keep the tool count small. A 9B model degrades quickly past a handful of tools.
-- Tool responses must stay inside the model's context window; `MAX_CONTENT_CHARS` and `MAX_SEARCH_RESULTS` cap them. Raising them past llama-cpp's per-slot context will truncate conversations.
+- Tool responses must stay inside the model's context window; `MAX_CONTENT_CHARS` and `MAX_SEARCH_RESULTS` cap them. Budget against llama-cpp's whole `--ctx-size`, not a per-slot share, and remember the export payloads the model writes back compete for the same budget.
 - `paperless-tools` is internal-only by design (no Traefik labels). Open WebUI reaches it over the `backend` network.
 - Open WebUI settings are **PersistentConfig**: env vars seed the database on first boot and are ignored afterward, silently. A setting that will not change from `.env` must be changed in the admin UI. This has bitten both `OPENAI_API_BASE_URL` and `ENABLE_SIGNUP` on this stack, because `./open-webui/data/webui.db` predates the current configuration.
 - To check what Open WebUI is actually configured with, read its config table directly rather than trusting `.env`:
@@ -113,13 +113,13 @@ When changing setup/behavior, update `README.md` with:
 
 ### Scaling up on better hardware
 
-Four settings are coupled to llama-cpp's **per-slot** context, which is `--ctx-size / --parallel`. Today that is `32768 / 4 = 8192` tokens on an RTX 5060 Ti 16 GB, with the model + mmproj occupying ~9.6 GB and ~6.3 GB free.
+Four settings are coupled to llama-cpp's context. Because `--kv-unified` is enabled, a single request is **not** limited to `--ctx-size / --parallel`; it can use the whole `--ctx-size` when other slots are idle, and llama-server reports `n_ctx_slot` as the full value. Today that is 65536 tokens on an RTX 5060 Ti 16 GB, with ~10.3 GB used and ~5.6 GB free.
 
 | Setting | Where | Today | Constraint |
 | ------- | ----- | ----- | ---------- |
-| `--ctx-size` / `--parallel` | `compose.yaml` llama-cpp | 32768 / 4 | VRAM. Verify with `nvidia-smi` after the model loads, not before. |
-| `PAPERLESS_AI_LLM_CONTEXT_SIZE` | `paperless/.env` | 8192 | Must not exceed per-slot context. |
-| `OPENAI_CONTEXT_LENGTH` | `paperless-gpt/.env` | 8192 | Same. |
+| `--ctx-size` / `--parallel` | `compose.yaml` llama-cpp | 65536 / 4 | VRAM. Verify with `nvidia-smi` after the model loads, not before. Doubling 32768 -> 65536 cost ~684 MiB. |
+| `PAPERLESS_AI_LLM_CONTEXT_SIZE` | `paperless/.env` | 8192 | Ceiling on what Paperless asks for. Raising it is safe up to `--ctx-size`, but the built-in chat retrieves only 5 chunks, so it gains little. |
+| `OPENAI_CONTEXT_LENGTH` | `paperless-gpt/.env` | 8192 | Benchmarked at this value for batch OCR throughput. Re-benchmark before raising. |
 | `MAX_CONTENT_CHARS` | `paperless-tools/.env` | 6000 | See fan-out math below. |
 
 The binding constraint on `MAX_CONTENT_CHARS` is not one call, it is a turn. The model issues **parallel** `get_document_content` calls — 9 in a single turn on this stack — and ignores the "read one at a time" instruction in the tool docstring. So budget:
@@ -128,12 +128,16 @@ The binding constraint on `MAX_CONTENT_CHARS` is not one call, it is a turn. The
 worst_case_tokens ≈ (parallel_calls × MAX_CONTENT_CHARS) / 4    # ~4 chars per token
 ```
 
-That must fit the per-slot context alongside the system prompt, tool schemas and conversation. At 9 × 6000 chars ≈ 13.5k tokens this is already optimistic for an 8192 window; it holds only because these register pages are ~2.5k characters, well under the cap. Longer documents would truncate silently, which reads as hallucination rather than overflow.
+That must fit `--ctx-size` alongside the system prompt, tool schemas and the whole conversation — and the export payloads the model writes back, which for a per-document CSV job are larger than the documents themselves.
+
+Overflow is **not** silent at the tool-call boundary: llama-server truncates the generation mid-JSON and returns `Failed to parse tool call arguments as JSON ... unexpected end of input`, with `truncated = 1` in its log. Partial work already committed by earlier tool calls stays committed, so a batch job stops part-finished rather than failing cleanly. Overflow inside document text is the silent case, and reads as hallucination.
+
+Batch size is the practical lever: a request covering ten documents exhausted 32768 tokens. Ask for a handful at a time rather than "every document".
 
 When raising any of these:
 
 1. Raise `--ctx-size` first and confirm VRAM headroom with the model loaded.
-2. Raise `PAPERLESS_AI_LLM_CONTEXT_SIZE` and `OPENAI_CONTEXT_LENGTH` to the new per-slot value.
+2. Raise `PAPERLESS_AI_LLM_CONTEXT_SIZE` if Paperless needs it, and `OPENAI_CONTEXT_LENGTH` only after re-benchmarking batch OCR.
 3. Raise `MAX_CONTENT_CHARS` last, and keep the fan-out math above satisfied.
 
 A larger model is likely to follow the read-one-at-a-time instruction better and to align OCR table columns more reliably — the parent/sponsor transposition seen in exports is a model limitation, not a pipeline bug. Neither improves by tuning the settings above.
@@ -146,8 +150,9 @@ The live `compose.yaml` runs llama-cpp with a config tuned for batch PDF→CSV/X
 
 Active flags and why:
 
-- `--ctx-size 32768 --parallel 4 --cont-batching` — 4 slots, 8192 ctx each. Per-slot ctx must match `OPENAI_CONTEXT_LENGTH` in `paperless-gpt/.env`.
-- `--kv-unified --cache-idle-slots` — single dynamic KV pool so large docs can borrow from idle slots; idle slot state is saved to prompt cache.
+- `--ctx-size 65536 --parallel 4 --cont-batching` — 4 slots. `OPENAI_CONTEXT_LENGTH` in `paperless-gpt/.env` is the ceiling paperless-gpt asks for per request, currently 8192; it was benchmarked at that value, so raising it needs a re-benchmark.
+- `--kv-unified --cache-idle-slots` — single dynamic KV pool so large docs can borrow from idle slots; idle slot state is saved to prompt cache. **Note the consequence: `--ctx-size / --parallel` is not a hard per-request cap.** llama-server reports `n_ctx_slot = <full ctx-size>`, and one conversation can consume all of it when the other slots are idle.
+- Raised from 32768 to 65536 after a real failure: an Open WebUI request that read ten documents and exported a CSV per document hit `n_tokens = 32767, truncated = 1`, which cut a tool call mid-JSON and produced `Failed to parse tool call arguments as JSON ... unexpected end of input`. Six of ten exports had completed. Doubling the context cost only ~684 MiB of VRAM (9590 -> 10274 MiB used, 5.6 GB still free), because GQA plus `--cache-type-k/v q8_0` makes the KV cache small.
 - `--cache-type-k q8_0 --cache-type-v q8_0` — V-cache is q8_0, NOT q4_0. Workload contains PII and digit-level fidelity matters.
 - `--batch-size 2048 --ubatch-size 512` — prefill-dominated PDF text benefits from larger ubatch.
 - `-t 8 --threads-batch 8` — match physical cores; SMT siblings hurt on Zen 3+.
@@ -163,6 +168,6 @@ Companion setting in `paperless-gpt/.env`:
 
 Re-tuning guidance:
 
-- Single-request low-latency chat: drop `--parallel` to 1, raise per-slot ctx, drop `--cache-idle-slots`.
+- Single-request low-latency chat: drop `--parallel` to 1, raise `--ctx-size`, drop `--cache-idle-slots`.
 - More concurrency: bump `--parallel` only after verifying VRAM headroom with `nvidia-smi` post-load.
 - Different hardware: re-derive thread count from physical cores and ctx from VRAM budget. Do not blindly copy these flags.
