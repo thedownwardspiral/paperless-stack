@@ -249,13 +249,17 @@ services:
     # mem_limit: 14g
     # Flags below are tuned for batch document ingestion (e.g. paperless-gpt
     # image-mode OCR). See AGENTS.md → "llama.cpp Batch-Tuning" for rationale.
+    # --ctx-size 65536 assumes a 16 GB-class GPU running a ~9B model at Q6:
+    # measured 10.3 GB used, 5.6 GB free. The KV cache costs roughly 21 KB per
+    # token here, so halving the context frees ~700 MB. Lower it if the model
+    # fails to load, if VRAM is tight, or if you run a larger model.
     command: >
       -m /app/models/Qwen3.5-9B-Q6_K.gguf
       --mmproj /app/models/mmproj-Qwen3.5-9B-BF16.gguf
       --jinja
       --reasoning off
       --flash-attn on
-      --ctx-size 32768
+      --ctx-size 65536
       --parallel 4
       --cont-batching
       --kv-unified
