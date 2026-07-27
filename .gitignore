@@ -38,6 +38,10 @@ ollama/models/*
 traefik/acme/*
 !traefik/acme/.gitkeep
 
+# Retired: the broker moved to valkey in v3. Ignored so a leftover local
+# ./redis/ cannot be re-added by a broad `git add`.
+redis/
+
 traefik/certs/*
 !traefik/certs/.gitkeep
 
@@ -53,6 +57,7 @@ traefik/certs/*
 # ------------------------------
 # IDE/editor files
 # ------------------------------
+*.code-workspace
 .vscode/
 .idea/
 
