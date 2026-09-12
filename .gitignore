@@ -17,6 +17,13 @@
 *.jks
 *.keystore
 
+# SSH keys (ollama keeps one in ./ollama/data/) and basicAuth password files
+id_rsa*
+id_ecdsa*
+id_ed25519*
+.htpasswd
+*.htpasswd
+
 # ------------------------------
 # Runtime data (keep placeholders)
 # ------------------------------
@@ -42,8 +49,66 @@ traefik/acme/*
 # ./redis/ cannot be re-added by a broad `git add`.
 redis/
 
+# Retired: replaced by paperless-ngx's native AI in v3. The leftover local
+# ./paperless-ai/ holds its API key and its own copy of document text
+# (documents.json, search index, vector DB).
+paperless-ai/
+
 traefik/certs/*
 !traefik/certs/.gitkeep
+
+# ------------------------------
+# Document data, by file type
+# ------------------------------
+# The directories above already cover where this data lives. These catch a
+# stray copy anywhere else - a scan, an export or a backup dropped in the repo
+# root. The documents contain personal information about third parties. To
+# track a file of one of these types on purpose (a README screenshot, say),
+# add a `!path` exception rather than removing a rule.
+
+# Scans, originals, archived copies and thumbnails
+*.pdf
+*.tif
+*.tiff
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.heic
+
+# Exports and extracted tables
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.ods
+*.doc
+*.docx
+*.odt
+
+# Mail consumed from mailboxes
+*.eml
+*.msg
+
+# Databases, dumps, indexes and broker snapshots
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sql
+*.sql.gz
+*.dump
+*.rdb
+*.aof
+*.pkl
+
+# Backup archives
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
 
 # ------------------------------
 # Logs and temp files
@@ -100,4 +165,8 @@ acme.json
 *.tmpl
 traefik/traefik.dynamic.yml
 traefik/traefik.yml
+# Live compose files carry real hostnames; only compose.yaml.example is tracked
 compose.yaml
+compose.yml
+docker-compose.yaml
+docker-compose.yml
