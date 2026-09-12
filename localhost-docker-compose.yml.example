@@ -1,0 +1,330 @@
+services:
+  # traefik reverse proxy
+  # Ports are bound to 127.0.0.1 explicitly. A bare "80:80" publishes on every
+  # interface, and Docker's NAT rules are traversed before the INPUT chain, so
+  # a host firewall will not contain it.
+  traefik:
+    image: traefik:latest
+    container_name: traefik_v3
+    restart: unless-stopped
+    networks:
+      - traefik_default
+    ports:
+      - "127.0.0.1:80:80"
+      # No HTTPS routers remain, so 443 is unused. Uncomment if you re-enable TLS.
+      # - "127.0.0.1:443:443"
+    env_file:
+      - ./traefik/.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # certs/ and acme/ are unused without a cert resolver, but are left
+      # mounted so switching back to step-ca is a one-line change.
+      - ./traefik/certs/:/etc/step/
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml
+      - ./traefik/traefik.dynamic.yml:/etc/traefik/traefik.dynamic.yml
+      - ./traefik/acme/:/etc/traefik/acme/
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.entrypoints=http"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`)"
+      # traefik-auth@file dropped with the secure router. Re-add here if you
+      # still want the dashboard behind basic auth:
+      # - "traefik.http.routers.traefik.middlewares=traefik-auth@file"
+      - "traefik.http.routers.traefik.service=api@internal"
+
+  # paperless-ngx main service
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless-ngx
+    restart: unless-stopped
+    env_file:
+      - ./paperless/.env
+    depends_on:
+      - postgres
+      - valkey
+      - gotenberg
+      - tika
+    networks:
+      - backend
+      - traefik_default
+    volumes:
+      - ./paperless/data:/usr/src/paperless/data
+      - ./paperless/media:/usr/src/paperless/media
+      - ./paperless/export:/usr/src/paperless/export
+      - ./paperless/consume:/usr/src/paperless/consume
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless.entrypoints=http"
+      - "traefik.http.routers.paperless.rule=Host(`paperless.localhost`)"
+      - "traefik.http.services.paperless.loadbalancer.server.port=8000"
+      - "traefik.docker.network=traefik_default"
+
+  # postgres database for paperless-ngx
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    container_name: postgres
+    env_file:
+      - ./postgres/.env
+    networks:
+      - backend
+    volumes:
+      - ./postgres/data:/var/lib/postgresql
+
+  # valkey message broker for paperless-ngx (celery queue + channels)
+  # Redis-protocol compatible; upstream paperless-ngx switched its bundled
+  # compose files from redis to valkey in v3. PAPERLESS_REDIS still uses the
+  # redis:// scheme.
+  valkey:
+    image: docker.io/valkey/valkey:9-alpine
+    container_name: valkey
+    restart: unless-stopped
+    env_file:
+      - ./valkey/.env
+    networks:
+      - backend
+    volumes:
+      - ./valkey/data:/data
+
+  # gotenberg service that paperless uses for document conversion
+  gotenberg:
+    image: docker.io/gotenberg/gotenberg:8.34
+    container_name: gotenberg
+    env_file:
+      - ./gotenberg/.env
+    restart: unless-stopped
+    networks:
+      - backend
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+
+  # tika service that paperless uses for document text extraction
+  tika:
+    image: docker.io/apache/tika:latest
+    container_name: tika
+    restart: unless-stopped
+    env_file: ./tika/.env
+    networks:
+      - backend
+
+
+  # open-webui: conversational front end for querying documents.
+  # Unlike Paperless-ngx's built-in chat (which retrieves at most 5 vector
+  # chunks), this drives the model with tool calls against paperless-tools, so
+  # it sees complete query results and can export them to CSV.
+  # Requires llama-cpp's --jinja flag for tool calling.
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:latest
+    container_name: open-webui
+    restart: unless-stopped
+    env_file:
+      - ./open-webui/.env
+    depends_on:
+      # - ollama
+      - llama-cpp
+      - paperless-tools
+    networks:
+      - backend
+      - traefik_default
+    volumes:
+      - ./open-webui/data:/app/backend/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.open-webui.entrypoints=http"
+      - "traefik.http.routers.open-webui.rule=Host(`open-webui.localhost`)"
+      - "traefik.http.routers.open-webui.service=open-webui"
+      - "traefik.http.services.open-webui.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_default"
+
+  # paperless-tools: OpenAPI tool server that Open WebUI calls.
+  # Exposes keyword search, full document text, and CSV export against the
+  # Paperless API. Internal only - Open WebUI reaches it over the backend
+  # network, so it is deliberately not routed through Traefik.
+  paperless-tools:
+    build: ./paperless-tools
+    container_name: paperless-tools
+    restart: unless-stopped
+    env_file:
+      - ./paperless-tools/.env
+    depends_on:
+      - paperless
+    networks:
+      - backend
+    volumes:
+      # export_csv writes here; same directory Paperless exports into
+      - ./paperless/export:/export
+
+  # ollama service for local LLMs
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama
+  #   env_file:
+  #     - ./ollama/.env
+  #   networks:
+  #     - backend
+  #     - traefik_default
+  #   volumes:
+  #     - ./ollama/data/:/root/.ollama
+  #     - ./ollama/models:/ollama-models
+  #   restart: unless-stopped
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.ollama.entrypoints=http"
+  #     - "traefik.http.routers.ollama.rule=Host(`ollama.localhost`)"
+  #     - "traefik.http.services.ollama.loadbalancer.server.port=11434"
+  #     - "traefik.docker.network=traefik_default"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+
+  # llama-swap service for swapping out LLM backends (alternative to open-webui)
+  # llama-swap:
+  #   image: ghcr.io/mostlygeek/llama-swap:cuda
+  #   container_name: llama-swap
+  #   env_file:
+  #     - ./llama-swap/.env
+  #   networks:
+  #     - backend
+  #     - traefik_default
+  #   volumes:
+  #     - ./llama-swap/config.yaml:/app/config.yaml
+  #     - ./llama-swap/data:/app/data
+  #     - ./llama-swap/models:/app/models
+  #   restart: unless-stopped
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.llama-swap.entrypoints=http"
+  #     - "traefik.http.routers.llama-swap.rule=Host(`llama-swap.localhost`)"
+  #     - "traefik.http.services.llama-swap.loadbalancer.server.port=8080"
+  #     - "traefik.docker.network=traefik_default"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+
+  # llama-cpp service for local LLMs (alternative to ollama)
+  llama-cpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: llama-cpp
+    env_file:
+      - ./llama-cpp/.env
+    networks:
+      - backend
+      - traefik_default
+    volumes:
+      - ./llama-cpp/models:/app/models
+    restart: unless-stopped
+    ipc: host
+    # Optional: pin to physical cores only and cap RAM. Tune for your host.
+    # cpuset: "0,2,4,6,8,10,12,14"  # physical cores on an 8C/16T SMT CPU
+    # mem_limit: 14g
+    # Flags below are tuned for batch document ingestion (e.g. paperless-gpt
+    # image-mode OCR). See AGENTS.md → "llama.cpp Batch-Tuning" for rationale.
+    # --ctx-size 65536 assumes a 16 GB-class GPU running a ~9B model at Q6:
+    # measured 10.3 GB used, 5.6 GB free. The KV cache costs roughly 21 KB per
+    # token here, so halving the context frees ~700 MB. Lower it if the model
+    # fails to load, if VRAM is tight, or if you run a larger model.
+    command: >
+      -m /app/models/Qwen3.5-9B-Q6_K.gguf
+      --mmproj /app/models/mmproj-Qwen3.5-9B-BF16.gguf
+      --jinja
+      --reasoning off
+      --flash-attn on
+      --ctx-size 65536
+      --parallel 4
+      --cont-batching
+      --kv-unified
+      --cache-idle-slots
+      -ngl 99
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --batch-size 2048
+      --ubatch-size 512
+      -t 8 --threads-batch 8
+      --sleep-idle-seconds -1
+      --host 0.0.0.0 --port 8080
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.llama-cpp.entrypoints=http"
+      - "traefik.http.routers.llama-cpp.rule=Host(`llama-cpp.localhost`)"
+      - "traefik.http.services.llama-cpp.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_default"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+
+  # paperless-ai was removed here: paperless-ngx v3 ships native AI features
+  # (LLM suggestions, RAG/similar documents, document chat) which cover
+  # everything paperless-ai provided. Configure them via the PAPERLESS_AI_*
+  # variables in ./paperless/.env.
+
+
+  # paperless-gpt service
+  # Kept because paperless-ngx's built-in remote OCR only supports Azure AI,
+  # while paperless-gpt can do vision-LLM OCR against the local llama-cpp.
+  paperless-gpt:
+    image: icereed/paperless-gpt:latest
+    container_name: paperless-gpt
+    restart: unless-stopped
+    depends_on:
+      # - ollama
+      - llama-cpp
+      - paperless
+    networks:
+      - backend
+      - traefik_default
+    env_file:
+      - ./paperless-gpt/.env
+    volumes:
+      - ./paperless-gpt/prompts:/app/prompts # Mount the prompts directory
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless-gpt.entrypoints=http"
+      - "traefik.http.routers.paperless-gpt.rule=Host(`paperless-gpt.localhost`)"
+      - "traefik.http.services.paperless-gpt.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_default"
+
+
+  # optional but helpful log viewer
+  dozzle:
+    image: amir20/dozzle:latest
+    restart: unless-stopped
+    container_name: dozzle
+    env_file:
+      - ./dozzle/.env
+    networks:
+      - backend
+      - traefik_default
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dozzle/data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dozzle.entrypoints=http"
+      - "traefik.http.routers.dozzle.rule=Host(`dozzle.localhost`)"
+      - "traefik.http.services.dozzle.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_default"
+
+networks:
+  backend:
+    external: false
+  # Compose-managed now, but the name is pinned so every
+  # traefik.docker.network=traefik_default label keeps resolving. Without
+  # "name:", compose would create <project>_traefik_default and break them.
+  traefik_default:
+    driver: bridge
+    name: traefik_default
