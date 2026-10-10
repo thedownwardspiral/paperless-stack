@@ -4,11 +4,12 @@ Docker Compose stack for running Paperless-ngx with local AI capabilities, using
 
 This is a fork of [timothystewart6/paperless-stack](https://github.com/timothystewart6/paperless-stack) with the following changes:
 
-- **llama.cpp** replaces Ollama and Open WebUI — runs GGUF models directly via llama-server with CUDA support
+- **llama.cpp** replaces Ollama — runs GGUF models directly via llama-server with CUDA support
 - **Traefik** reverse proxy added for TLS termination and routing (services are not exposed on localhost ports)
 - **Paperless-ngx native AI** (v3+) points at llama-cpp's OpenAI-compatible API — `paperless-ai` was removed as redundant
 - **Valkey** replaces Redis as the broker, matching upstream's v3 compose files
-- Ollama, Open WebUI, and llama-swap service definitions are kept commented out as alternatives in `compose.yaml.example`
+- **Open WebUI + paperless-tools** add a conversational front end that queries the whole document corpus through tool calls and exports CSV (see [Conversational document queries](#conversational-document-queries-open-webui--paperless-tools))
+- Ollama and llama-swap service definitions are kept commented out as alternatives in `compose.yaml.example`
 
 ## Quick Start
 
@@ -74,7 +75,7 @@ This is a fork of [timothystewart6/paperless-stack](https://github.com/timothyst
    docker compose exec paperless document_llmindex rebuild
    ```
 
-**The AI components are entirely optional.** Set `PAPERLESS_AI_ENABLED=0` in `./paperless/.env` and comment out `llama-cpp` and `paperless-gpt` to run a plain stack. Paperless works great without AI.
+**The AI components are entirely optional.** Set `PAPERLESS_AI_ENABLED=0` in `./paperless/.env` and comment out `llama-cpp`, `paperless-gpt`, `open-webui` and `paperless-tools` to run a plain stack (`open-webui` and `paperless-gpt` depend on `llama-cpp`, so leaving them in breaks `docker compose config`). Paperless works great without AI.
 
 ## Architecture
 
@@ -212,6 +213,7 @@ This stack is built using these open-source projects:
 - **[llama.cpp](https://github.com/ggerganov/llama.cpp)** - LLM inference in C/C++
 - **[Traefik](https://github.com/traefik/traefik)** - Cloud-native reverse proxy
 - **[Paperless-GPT](https://github.com/icereed/paperless-gpt)** - Vision OCR for Paperless
+- **[Open WebUI](https://github.com/open-webui/open-webui)** - Conversational front end
 - **[PostgreSQL](https://github.com/postgres/postgres)** - Database system
 - **[Valkey](https://github.com/valkey-io/valkey)** - Message broker
 - **[Gotenberg](https://github.com/gotenberg/gotenberg)** - Document conversion API
