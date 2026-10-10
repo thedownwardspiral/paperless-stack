@@ -10,13 +10,14 @@ This file defines how automated coding agents should work in this repository.
 - AI services: `llama-cpp` (LLM backend), `paperless-gpt` (vision-LLM OCR), `open-webui` (conversational UI), `paperless-tools` (OpenAPI tool server)
 - Infrastructure: `traefik` (reverse proxy with TLS)
 - Utility service: `dozzle`
-- Commented-out alternatives in compose.yaml.example: `ollama`, `open-webui`, `llama-swap`
+- Commented-out alternatives in compose.yaml.example: `ollama`, `llama-swap`
 
 ## Key Differences from Upstream
 
 This is a fork of timothystewart6/paperless-stack. Notable changes:
 
-- **llama.cpp** is the active LLM backend (replaces Ollama + Open WebUI)
+- **llama.cpp** is the active LLM backend (replaces Ollama)
+- **Open WebUI + paperless-tools** provide a conversational UI with corpus-wide tool calls and CSV export
 - **Traefik** reverse proxy handles routing and TLS — services are not exposed on localhost ports
 - **Native paperless-ngx AI** (v3+) points at llama-cpp's OpenAI-compatible API; `paperless-ai` was removed as redundant
 - **valkey** is the broker (matches upstream v3 compose); the old `./redis/` directory is no longer referenced

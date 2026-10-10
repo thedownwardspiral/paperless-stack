@@ -25,7 +25,8 @@ EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "/export"))
 # Keep tool output inside the model's context window. Size this for a fan-out,
 # not a single call: the model issues parallel get_document_content calls
 # (observed 9 in one turn) regardless of the "read one at a time" instruction
-# below, and llama-cpp only has 8192 tokens per slot.
+# below, and every result shares llama-cpp's --ctx-size with the conversation
+# and any export payloads. See AGENTS.md -> "Scaling up on better hardware".
 MAX_CONTENT_CHARS = int(os.environ.get("MAX_CONTENT_CHARS", "6000"))
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "50"))
 PREVIEW_ROWS = 10
