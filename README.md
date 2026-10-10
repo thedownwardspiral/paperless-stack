@@ -188,20 +188,20 @@ Full details: [v3 migration guide](https://docs.paperless-ngx.com/migration-v3/)
 
 ## Repository security checks
 
-GitHub Actions in `.github/workflows/` run on every PR and push to `main`, and most also run weekly:
+GitHub Actions in `.github/workflows/` run security checks. Triggers vary by workflow:
 
-| Workflow | Checks |
-| -------- | ------ |
-| `gitleaks.yml` | Secrets in new commits; full history weekly |
-| `codeql.yml` | Static analysis of `paperless-tools` (Python) and of the workflows |
-| `dependency-review.yml` | PRs that add dependencies with known vulnerabilities |
-| `paperless-tools-image.yml` | Hadolint on the Dockerfile; Trivy CVE scan of the built image |
-| `zizmor.yml` | Workflow injection, excessive permissions, unpinned actions |
-| `scorecard.yml` | OpenSSF Scorecard posture report (Security tab) |
+| Workflow | Runs on | Checks |
+| -------- | ------- | ------ |
+| `gitleaks.yml` | PR, push to `main`, weekly | Secrets in new commits; full history weekly |
+| `codeql.yml` | PR, push to `main`, weekly | Static analysis of `paperless-tools` (Python) and of the workflows |
+| `dependency-review.yml` | PR | PRs that add dependencies with known vulnerabilities |
+| `paperless-tools-image.yml` | PR or push touching `paperless-tools/`, weekly | Hadolint on the Dockerfile; Trivy CVE scan of the built image |
+| `zizmor.yml` | PR or push touching `.github/` | Workflow injection, excessive permissions, unpinned actions |
+| `scorecard.yml` | Push to `main`, weekly | OpenSSF Scorecard posture report (Security tab) |
 
 `.github/dependabot.yml` opens weekly update PRs for the actions, the `paperless-tools` Python packages and its base image. Third-party actions are pinned to commit SHAs, and Dependabot keeps those pins current.
 
-These checks only gate merges when branch protection on `main` requires them. Also turn on secret scanning with push protection, Dependabot alerts, and private vulnerability reporting under **Settings → Code security**.
+A ruleset on `main` requires `gitleaks`, `dependency-review` and both CodeQL `Analyze` jobs to pass before merging. The path-filtered checks are not required, because a required check that never runs blocks the PR. On a fork or copy of this repo, recreate the ruleset under **Settings → Rules**, and turn on secret scanning with push protection, Dependabot alerts, and private vulnerability reporting under **Settings → Code security**.
 
 ## Resources
 
