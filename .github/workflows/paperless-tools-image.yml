@@ -1,0 +1,59 @@
+# Lints the paperless-tools Dockerfile and scans the built image for CVEs.
+# The weekly run catches new CVEs in the base image between code changes.
+name: paperless-tools image
+
+on:
+  push:
+    branches: [main]
+    paths: ["paperless-tools/**", ".github/workflows/paperless-tools-image.yml"]
+  pull_request:
+    paths: ["paperless-tools/**", ".github/workflows/paperless-tools-image.yml"]
+  schedule:
+    - cron: "53 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  hadolint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: paperless-tools/Dockerfile
+          failure-threshold: warning
+
+  trivy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: paperless-tools
+          load: true
+          push: false
+          tags: paperless-tools:ci
+
+      # Unfixed CVEs are skipped: they cannot be acted on until Debian or the
+      # Python base image ships a fix.
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: paperless-tools:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

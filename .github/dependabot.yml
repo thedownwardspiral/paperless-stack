@@ -1,0 +1,31 @@
+# Dependabot version updates. Security updates are enabled separately in
+# Settings -> Code security and do not depend on this file.
+version: 2
+updates:
+  # Keeps the SHA-pinned actions in .github/workflows/ current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /paperless-tools
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /paperless-tools
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
