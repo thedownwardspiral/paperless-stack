@@ -186,6 +186,23 @@ Full details: [v3 migration guide](https://docs.paperless-ngx.com/migration-v3/)
 - **GPU**: llama-cpp is configured for NVIDIA CUDA. Remove the `deploy.resources` section in `compose.yaml` if you don't have an NVIDIA GPU.
 - **Models**: Place GGUF model files in `./llama-cpp/models/`. Update the `-m` and `--mmproj` paths in the llama-cpp command in `compose.yaml` to match your model filenames.
 
+## Repository security checks
+
+GitHub Actions in `.github/workflows/` run security checks. Triggers vary by workflow:
+
+| Workflow | Runs on | Checks |
+| -------- | ------- | ------ |
+| `gitleaks.yml` | PR, push to `main`, weekly | Secrets in new commits; full history weekly |
+| `codeql.yml` | PR, push to `main`, weekly | Static analysis of `paperless-tools` (Python) and of the workflows |
+| `dependency-review.yml` | PR | PRs that add dependencies with known vulnerabilities |
+| `paperless-tools-image.yml` | PR or push touching `paperless-tools/`, weekly | Hadolint on the Dockerfile; Trivy CVE scan of the built image |
+| `zizmor.yml` | PR or push touching `.github/` | Workflow injection, excessive permissions, unpinned actions |
+| `scorecard.yml` | Push to `main`, weekly | OpenSSF Scorecard posture report (Security tab) |
+
+`.github/dependabot.yml` opens weekly update PRs for the actions, the `paperless-tools` Python packages and its base image. Third-party actions are pinned to commit SHAs, and Dependabot keeps those pins current.
+
+A ruleset on `main` requires `gitleaks`, `dependency-review` and both CodeQL `Analyze` jobs to pass before merging. The path-filtered checks are not required, because a required check that never runs blocks the PR. On a fork or copy of this repo, recreate the ruleset under **Settings → Rules**, and turn on secret scanning with push protection, Dependabot alerts, and private vulnerability reporting under **Settings → Code security**.
+
 ## Resources
 
 - **Original guide**: [Self-Hosted Paperless-ngx + Optional Local AI](https://technotim.com/posts/paperless-ngx-local-ai/)
